@@ -16,7 +16,8 @@
 
 ## 已知问题
 
-
+#### 缺少JSX的支持
+#### 缺少vue文件script中render函数的支持
 
 #### template
 
