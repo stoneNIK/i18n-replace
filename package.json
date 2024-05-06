@@ -1,10 +1,13 @@
 {
-  "name": "vue-generate-i18n",
+  "name": "gr-i18n",
   "version": "1.0.0",
-  "description": "",
+  "description": "generate and replace i18n for vue",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "bin": {
+    "gri18n": "bin/index.js"
   },
   "author": "stoneNIK",
   "license": "ISC",
