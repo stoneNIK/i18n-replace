@@ -1,18 +1,52 @@
 {
-  "name": "gr-i18n",
-  "version": "1.0.0",
-  "description": "generate and replace i18n for vue",
-  "main": "index.js",
+  "name": "i18n-replace",
+  "version": "0.0.1",
+  "description": "i18n-replace node cli",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "unbuild"
   },
   "bin": {
-    "gri18n": "bin/index.js"
+    "gri18n": "./bin/index.js"
+  },
+  "type": "module",
+  "keywords": [
+    "i18n",
+    "vue",
+    "react",
+    "nodejs",
+    "typescript",
+    "vue-i18n"
+  ],
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/node": "^22.4.2",
+    "@types/prettier": "^3.0.0",
+    "eslint-plugin-node": "^11.1.0",
+    "unbuild": "^2.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5.1.6"
+  },
+  "dependencies": {
+    "@babel/generator": "^7.25.0",
+    "@babel/parser": "^7.25.3",
+    "@babel/traverse": "^7.25.3",
+    "@babel/types": "^7.25.2",
+    "@prettier/sync": "^0.5.2",
+    "@vue/compiler-core": "^3.4.38",
+    "@vue/compiler-sfc": "^3.4.38",
+    "axios": "^1.7.7",
+    "commander": "^12.1.0",
+    "consola": "^3.2.3",
+    "csvtojson": "^2.0.10",
+    "fs-extra": "^11.2.0",
+    "glob": "^11.0.0",
+    "md5-node": "^1.0.1"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=18"
   },
   "author": "stoneNIK",
-  "license": "ISC",
-  "dependencies": {
-    "axios": "^1.6.8",
-    "md5-node": "^1.0.1"
-  }
+  "license": "MIT"
 }

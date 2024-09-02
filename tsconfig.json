@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "@types/node"
+    ],
+    "declaration": false,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "baseUrl": "./src"
+  },
+  "include": [
+    ".eslintrc.cjs",
+    "src",
+    "./*.ts"
+  ],
+  "ts-node": {
+    "esm": true
+  },
+}
