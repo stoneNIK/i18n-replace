@@ -9,20 +9,19 @@ import type {
   RootNode,
 } from "@vue/compiler-core";
 import type { File, Expression } from "@babel/types";
-import synchronizedPrettier from "@prettier/sync";
+import prettier from "prettier";
 
 function generateElementAttr(attrs: Array<AttributeNode | DirectiveNode>) {
   return attrs.map((attr) => attr.loc.source).join(" ");
 }
 
+export type ParseAst = ParseResult<File> | ParseResult<Expression>;
 /**
  * 生成template内部JS表达式
  * 字符串需要使用单引号
  * 函数调用末尾的分号需要移除
  */
-export function generateInterpolation(
-  ast: ParseResult<File> | ParseResult<Expression>
-) {
+export function generateInterpolation(ast: ParseAst) {
   // that's a hack, because @babel/generator will give a semi after a callexpression
   return babelGenerator(ast, {
     compact: false,
@@ -35,14 +34,24 @@ export function generateInterpolation(
 /**
  * 生成script内部的JS
  */
-export function generateJS(ast: ParseResult<File> | ParseResult<Expression>) {
+export function generateJS(ast: ParseAst) {
   return babelGenerator(ast).code;
+}
+
+export async function generateFormatterJS(
+  ast: ParseAst,
+  prettierOptions: prettier.Options
+) {
+  return prettier.format(babelGenerator(ast).code, prettierOptions);
 }
 
 /**
  * 组合template，script，style
  */
-export function generateSfc(descriptor: SFCDescriptor) {
+export function generateSfc(
+  descriptor: SFCDescriptor,
+  prettierOptions: prettier.Options
+) {
   let result = "";
 
   const { template, script, scriptSetup, styles, customBlocks } = descriptor;
@@ -65,11 +74,7 @@ export function generateSfc(descriptor: SFCDescriptor) {
     }
   );
 
-  return synchronizedPrettier.format(result, {
-    parser: "vue",
-    semi: true,
-    singleQuote: true,
-  });
+  return prettier.format(result, prettierOptions);
 }
 
 function generateElement(node: ElementNode, children: string) {
@@ -124,6 +129,11 @@ export function generateTemplate(
   // 元素节点
   if (templateAst.type === 1) {
     return generateElement(templateAst, children);
+  }
+
+  // 根节点
+  if (templateAst.type === 0) {
+    return children;
   }
 
   return templateAst.loc.source;

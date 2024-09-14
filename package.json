@@ -3,7 +3,9 @@
   "version": "0.0.1",
   "description": "i18n-replace node cli",
   "scripts": {
-    "build": "unbuild"
+    "build": "unbuild",
+    "test": "vitest --ui",
+    "coverage": "vitest run --coverage"
   },
   "bin": {
     "gri18n": "./bin/index.js"
@@ -21,8 +23,11 @@
     "@types/glob": "^8.1.0",
     "@types/node": "^22.4.2",
     "@types/prettier": "^3.0.0",
+    "@vitest/coverage-v8": "^2.0.5",
+    "@vitest/ui": "^2.0.5",
     "eslint-plugin-node": "^11.1.0",
-    "unbuild": "^2.0.0"
+    "unbuild": "^2.0.0",
+    "vitest": "^2.0.5"
   },
   "peerDependencies": {
     "typescript": "^5.1.6"
@@ -41,7 +46,8 @@
     "csvtojson": "^2.0.10",
     "fs-extra": "^11.2.0",
     "glob": "^11.0.0",
-    "md5-node": "^1.0.1"
+    "md5-node": "^1.0.1",
+    "prettier": "^3.3.3"
   },
   "private": true,
   "engines": {

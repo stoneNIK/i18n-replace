@@ -4,6 +4,7 @@ import * as t from "@babel/types";
 import {
   generateInterpolation,
   generateJS,
+  generateFormatterJS,
   generateSfc,
   generateTemplate,
 } from "./generator";
@@ -11,6 +12,9 @@ import { ConfigOptions, FileType } from "./types";
 import { parseVue, parseJS } from "./parse";
 import { NodeTypes } from "@vue/compiler-core";
 import consola from "consola";
+import path from "path";
+import prettier, { AST } from "prettier";
+import { SFCDescriptor } from "@vue/compiler-sfc";
 
 function createDirectiveAttr(type: string, name: string, value: string) {
   // 处理特殊的事件属性
@@ -42,109 +46,85 @@ function createInterpolationNode(content: string) {
   };
 }
 
-interface Options {
+export interface Options {
   code: string;
   locales: Record<string, string>;
   filename: string;
   emptyLocalesSet: Set<string>;
+  prettierOptions?: prettier.Options;
 }
 
-export class Transformer {
-  result: string = "";
-  locales: Record<string, string> = {}; // 提取的中文键值对
-  sourceCode: string;
-  filename: string;
-  fileType: FileType;
-  importVar: string = "i18n";
-  importPath: string = "";
-  config: ConfigOptions;
-  emptyLocalesSet: Set<string>;
+export const transformFile = async (
+  options: Options,
+  config: ConfigOptions
+): Promise<string> => {
+  const { code: sourceCode, filename, locales, emptyLocalesSet } = options;
+  const fileType = path.extname(filename) as FileType;
 
-  constructor(options: Options, config: ConfigOptions) {
-    this.sourceCode = options.code;
-    this.filename = options.filename;
-    this.locales = options.locales;
-    this.emptyLocalesSet = options.emptyLocalesSet;
+  const hasTargetChar = (code: string): boolean => config.isTargetCode(code);
 
-    this.config = config;
-    this.startTransform();
-  }
-
-  hasTargetChar(code: string): boolean {
-    return this.config.characterReg(code);
-  }
-
-  startTransform() {
-    if (!Object.values(FileType).includes(this.fileType)) {
-      consola.warn(`Unsupported file type: ${this.filename}`);
-      return;
+  const extractChar = (char: string): string => {
+    const locale = char.trim().replace(/(\r\n|(\n))/g, ","); // 处理多行文字的情况，替换换行符
+    const existKey = Object.keys(locales).find((c) => locales[c] === locale);
+    if (existKey) {
+      return existKey;
     }
-    if (!this.hasTargetChar(this.sourceCode)) {
-      // 没有中文
-      return;
-    }
-    switch (this.fileType) {
-      case FileType.JS:
-        this.result = generateJS(this.transformJS(this.sourceCode));
-        break;
-      case FileType.VUE:
-        this.result = generateSfc(this.transformVue(this.sourceCode));
-        break;
-    }
-  }
+    emptyLocalesSet.add(locale); // 用于后期输出待翻译列表
+  };
 
-  transformJS(code: string, isInTemplate?: boolean) {
+  const transformJS = (code: string, isInTemplate?: boolean): AST => {
     const ast = parseJS(code);
     let shouldImportVar = false;
 
     const visitor: Visitor = {
       Program: {
         exit: (nodePath: NodePath) => {
-          if (this.fileType === FileType.JS) {
-            // 解析import语句
-            nodePath.traverse({
-              ImportDeclaration: (importPath) => {
-                if (
-                  importPath.node.specifiers.find(
-                    (item) => item.local.name === this.importVar
-                  )
-                ) {
-                  shouldImportVar = false;
-                  importPath.stop();
-                }
-              },
-            });
-
-            if (shouldImportVar) {
-              nodePath.unshiftContainer(
-                "body",
-                t.importDeclaration(
-                  [t.importDefaultSpecifier(t.identifier(this.importVar))],
-                  t.stringLiteral(this.importPath)
+          // 解析import语句
+          nodePath.traverse({
+            ImportDeclaration: (importPath) => {
+              if (
+                importPath.node.specifiers.find(
+                  (item) => item.local.name === config.importVar
                 )
-              );
-            }
+              ) {
+                shouldImportVar = false;
+                importPath.stop();
+              }
+            },
+          });
+
+          if (shouldImportVar) {
+            nodePath.unshiftContainer(
+              "body",
+              t.importDeclaration(
+                [t.importDefaultSpecifier(t.identifier(config.importVar))],
+                t.stringLiteral(config.importPath)
+              )
+            );
           }
         },
       },
       StringLiteral: {
         exit: (nodePath: NodePath) => {
           const rawValue: string = nodePath.node.extra?.rawValue;
-          if (this.hasTargetChar(rawValue)) {
-            const localeKey = this.extractChar(rawValue);
+          if (hasTargetChar(rawValue)) {
+            const localeKey = extractChar(rawValue);
+            if (!localeKey) {
+              return;
+            }
 
-            if (this.fileType === FileType.JS) {
+            if ([FileType.JS, FileType.JSX].includes(fileType)) {
               shouldImportVar = true;
               nodePath.replaceWith(
                 t.callExpression(
                   t.memberExpression(
-                    t.identifier(this.importVar),
+                    t.identifier(config.importVar),
                     t.identifier("t")
                   ),
                   [t.stringLiteral(localeKey)]
                 )
               );
-            } else if (this.fileType === FileType.VUE) {
+            } else if (fileType === FileType.VUE) {
               if (isInTemplate) {
                 nodePath.replaceWith(
                   t.callExpression(t.identifier("$t"), [
@@ -158,7 +138,7 @@ export class Transformer {
                 nodePath.replaceWith(
                   t.callExpression(
                     t.memberExpression(
-                      t.identifier(this.importVar),
+                      t.identifier(config.importVar),
                       t.identifier("t")
                     ),
                     [t.stringLiteral(localeKey)]
@@ -172,22 +152,23 @@ export class Transformer {
       TemplateLiteral: {
         exit: (nodePath: NodePath) => {
           // 检测模板字符串内部是否含有中文字符
-          if (
-            nodePath.node.quasis.some((q) => this.hasTargetChar(q.value.cooked))
-          ) {
+          if (nodePath.node.quasis.some((q) => hasTargetChar(q.value.cooked))) {
             // 生成替换字符串，注意这里不需要过滤quasis里的空字符串
             const replaceStr = nodePath.node.quasis
               .map((q) => q.value.cooked)
               .join(" ");
-            const localeKey = this.extractChar(replaceStr);
+            const localeKey = extractChar(replaceStr);
+            if (!localeKey) {
+              return;
+            }
             const isIncludeInterpolation = !!nodePath.node.expressions?.length;
-            if (this.fileType === FileType.JS) {
+            if ([FileType.JS, FileType.JSX].includes(fileType)) {
               shouldImportVar = true;
               if (isIncludeInterpolation) {
                 nodePath.replaceWith(
                   t.callExpression(
                     t.memberExpression(
-                      t.identifier(this.importVar),
+                      t.identifier(config.importVar),
                       t.identifier("t")
                     ),
                     [
@@ -207,14 +188,14 @@ export class Transformer {
                 nodePath.replaceWith(
                   t.callExpression(
                     t.memberExpression(
-                      t.identifier(this.importVar),
+                      t.identifier(config.importVar),
                       t.identifier("t")
                     ),
                     [t.stringLiteral(localeKey)]
                   )
                 );
               }
-            } else if (this.fileType === FileType.VUE) {
+            } else if (fileType === FileType.VUE) {
               if (isInTemplate) {
                 if (isIncludeInterpolation) {
                   nodePath.replaceWith(
@@ -243,7 +224,7 @@ export class Transformer {
                   nodePath.replaceWith(
                     t.callExpression(
                       t.memberExpression(
-                        t.identifier(this.importVar),
+                        t.identifier(config.importVar),
                         t.identifier("t")
                       ),
                       [
@@ -265,7 +246,7 @@ export class Transformer {
                   nodePath.replaceWith(
                     t.callExpression(
                       t.memberExpression(
-                        t.identifier(this.importVar),
+                        t.identifier(config.importVar),
                         t.identifier("t")
                       ),
                       [t.stringLiteral(localeKey)]
@@ -279,16 +260,26 @@ export class Transformer {
       },
       JSXText: {
         exit: (nodePath: NodePath) => {
-          if (this.hasTargetChar(nodePath.node.value)) {
-            const localeKey = this.extractChar(
+          if (hasTargetChar(nodePath.node.value)) {
+            shouldImportVar = true;
+
+            const localeKey = extractChar(
               nodePath.node.extra?.rawValue as string
             );
 
+            if (!localeKey) {
+              return;
+            }
+
             nodePath.replaceWith(
               t.jsxExpressionContainer(
-                t.callExpression(t.identifier("$t"), [
-                  t.stringLiteral(localeKey),
-                ])
+                t.callExpression(
+                  t.memberExpression(
+                    t.identifier(config.importVar),
+                    t.identifier("t")
+                  ),
+                  [t.stringLiteral(localeKey)]
+                )
               )
             );
           }
@@ -298,27 +289,27 @@ export class Transformer {
 
     babelTraverse(ast, visitor);
     return ast;
-  }
+  };
 
-  transformTemplate(ast) {
+  const transformTemplate = (ast: AST): AST => {
     if (ast.props?.length) {
       ast.props = ast.props.map((prop) => {
         // vue指令
         if (
           prop.type === NodeTypes.DIRECTIVE &&
-          this.hasTargetChar(prop.exp?.content)
+          hasTargetChar(prop.exp?.content)
         ) {
           const jsCode = generateInterpolation(
-            this.transformJS(prop.exp?.content, true)
+            transformJS(prop.exp?.content, true)
           );
           return createDirectiveAttr(prop.name, prop.exp?.content, jsCode);
         }
         // 普通属性
         if (
           prop.type === NodeTypes.ATTRIBUTE &&
-          this.hasTargetChar(prop.value?.content)
+          hasTargetChar(prop.value?.content)
         ) {
-          const localeKey = this.extractChar(prop.value.content);
+          const localeKey = extractChar(prop.value.content);
           if (localeKey) {
             return createDirectiveAttr("bind", prop.name, `$t('${localeKey}')`);
           }
@@ -330,11 +321,8 @@ export class Transformer {
 
     if (ast.children.length) {
       ast.children = ast.children.map((child) => {
-        if (
-          child.type === NodeTypes.TEXT &&
-          this.hasTargetChar(child.content)
-        ) {
-          const localeKey = this.extractChar(child.content);
+        if (child.type === NodeTypes.TEXT && hasTargetChar(child.content)) {
+          const localeKey = extractChar(child.content);
           if (localeKey) {
             return createInterpolationNode(`$t('${localeKey}')`);
           }
@@ -343,52 +331,62 @@ export class Transformer {
         // 插值语法，插值语法的内容包含在child.content内部，如果匹配到中文字符，则进行JS表达式解析并替换
         if (
           child.type === NodeTypes.INTERPOLATION &&
-          this.hasTargetChar(child.content?.content)
+          hasTargetChar(child.content?.content)
         ) {
           const jsCode = generateInterpolation(
-            this.transformJS(child.content?.content, true)
+            transformJS(child.content?.content, true)
           );
           return createInterpolationNode(jsCode);
         }
 
         // 元素
         if (child.type === NodeTypes.ELEMENT) {
-          return this.transformTemplate(child);
+          return transformTemplate(child);
         }
 
         return child;
       });
     }
     return ast;
-  }
+  };
 
-  transformVue(code: string) {
+  const transformVue = (code: string): SFCDescriptor => {
     const descriptor = parseVue(code);
     let { template, script, scriptSetup } = descriptor;
-    if (template?.content && this.hasTargetChar(template?.content)) {
-      descriptor.template.content = generateTemplate(
-        this.transformTemplate(template?.ast)
-      );
+    if (template?.content && hasTargetChar(template?.content)) {
+      const templateAst = transformTemplate(template?.ast);
+      descriptor.template.content = generateTemplate(templateAst, "");
     }
 
     if (script?.content) {
-      descriptor.script.content = generateJS(this.transformJS(script.content));
+      descriptor.script.content = generateJS(transformJS(script.content));
     } else if (scriptSetup?.content) {
       descriptor.scriptSetup.content = generateJS(
-        this.transformJS(scriptSetup.content)
+        transformJS(scriptSetup.content)
       );
     }
     return descriptor;
-  }
+  };
 
-  extractChar(char: string): string {
-    const locale = char.trim().replace(/(\r\n|(\n))/g, ","); // 处理多行文字的情况，替换换行符
-    const existKey = Object.keys(this.locales).find(
-      (c) => this.locales[c] === locale
-    );
-    if (existKey) {
-      return existKey;
-    }
-    this.emptyLocalesSet.add(locale); // 用于后期输出待翻译列表
+  if (!Object.values(FileType).includes(fileType)) {
+    consola.warn(`Unsupported file type: ${filename}`);
+    return;
   }
-}
+  if (!hasTargetChar(sourceCode)) {
+    // 没有需要翻译的文件直接返回
+    return;
+  }
+  const prettierOptions = options.prettierOptions ?? {
+    // 如果当前项目没有使用prettier，就使用默认配置
+    semi: false,
+    filepath: filename,
+  };
+  switch (fileType) {
+    // TODO: TSX
+    case FileType.JSX:
+    case FileType.JS:
+      return generateFormatterJS(transformJS(sourceCode), prettierOptions);
+    case FileType.VUE:
+      return generateSfc(transformVue(sourceCode), prettierOptions);
+  }
+};

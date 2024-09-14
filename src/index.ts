@@ -5,8 +5,11 @@ import { glob } from "glob";
 import csvtojson from "csvtojson";
 import { ConfigOptions } from "./types";
 import { getConfigOptions } from "./config";
-import { Transformer } from "./transform";
+import { transformFile } from "./transform";
 import { getTranslateKey } from "./translate";
+import prettier from "prettier";
+import os from "os";
+import { parallelTask, TaskItem } from "parallelTask";
 
 export const csvPath = path.resolve(process.cwd(), "i18n.csv");
 
@@ -27,28 +30,35 @@ export const replaceFiles = async (noCsv) => {
       locales = JSON.parse(content);
     }
   }
+  const prettierOptions = await prettier.resolveConfig(process.cwd());
   let emptyLocalesSet: Set<string> = new Set();
 
   const files = glob.sync(config.pattern!, { ignore: config.ignore });
-  for (const filename of files) {
-    const filePath = path.resolve(process.cwd(), filename);
-    consola.info(`🚀 detecting file: ${filePath}`);
-    const sourceCode = fs.readFileSync(filePath, "utf8");
-    try {
-      const { result } = new Transformer(
-        {
-          code: sourceCode,
-          locales,
-          filename,
-          emptyLocalesSet,
-        },
-        config
-      );
-      fs.writeFileSync(filePath, result, "utf8");
-    } catch (err) {
-      consola.log(err);
-    }
-  }
+
+  const taskList = files.map((filename: string): TaskItem => {
+    return async () => {
+      const filePath = path.resolve(process.cwd(), filename);
+      consola.info(`🚀 detecting file: ${filePath}`);
+      const sourceCode = fs.readFileSync(filePath, "utf8");
+      try {
+        const result = await transformFile(
+          {
+            code: sourceCode,
+            locales,
+            filename,
+            emptyLocalesSet,
+            prettierOptions,
+          },
+          config
+        );
+        result && fs.writeFileSync(filePath, result, "utf8");
+      } catch (err) {
+        consola.log(err);
+      }
+    };
+  });
+  const cpusCount = os.cpus().length; // 获取CPU逻辑处理器核心数，非物理核心数量
+  await parallelTask(taskList, cpusCount > 4 ? cpusCount - 3 : cpusCount);
 
   consola.success("🎉🎉🎉 执行成功!");
 
